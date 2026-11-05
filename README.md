@@ -9,4 +9,4 @@ Copy `.env.example` to `.env` and fill in your Supabase project URL and publisha
 | GET | /public/info | No |
 | GET | /protected/profile, /protected/dashboard | Yes |
 
-The backend asks Supabase Auth to verify every bearer token, and sends logout using the caller's token. Supabase logout revokes refresh sessions; an already-issued JWT may remain valid until expiry. Do not put a service role key in this app. [Swagger screenshot](swagger.png) shows the routes and authorization control. Tests use a fake provider; a real Supabase project remains necessary to verify the complete authentication flow.
+The backend uses the Supabase Python SDK to verify every bearer token and sign out the caller's session. Each request gets a fresh SDK client rather than sharing a mutable user session. Supabase logout revokes refresh sessions; an already-issued JWT may remain valid until expiry. Do not put a service role key in this app. [Swagger screenshot](swagger.png) shows the routes and authorization control. Tests use a fake provider; a real Supabase project remains necessary to verify the complete authentication flow.

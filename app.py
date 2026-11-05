@@ -1,29 +1,43 @@
 import os
 import requests
+import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from supabase import ClientOptions, create_client
+from supabase_auth.errors import AuthApiError
 
 load_dotenv()
 app = FastAPI(title="Supabase auth exercise")
 security = HTTPBearer(auto_error=False)
 
 class Provider:
-    def call(self, method, path, data=None, token=None):
+    def client(self):
         url = os.getenv("SUPABASE_URL", "").rstrip("/")
         key = os.getenv("SUPABASE_KEY", "")
         if not url or not key: raise RuntimeError("Supabase configuration missing")
-        headers = {"apikey": key, "Authorization": "Bearer " + (token or key)}
-        return requests.request(method, url + "/auth/v1/" + path, json=data, headers=headers, timeout=10)
+        return create_client(url, key, options=ClientOptions(persist_session=False, auto_refresh_token=False))
+    def signup(self, data):
+        result = self.client().auth.sign_up(data)
+        return result.user.model_dump(mode="json") if result.user else {}
+    def login(self, data):
+        session = self.client().auth.sign_in_with_password(data).session
+        if not session: raise RuntimeError("No session returned")
+        return {"access_token":session.access_token, "refresh_token":session.refresh_token}
     def user(self, token):
-        r = self.call("GET", "user", token=token)
-        return r.json() if r.ok else None
+        try:
+            result = self.client().auth.get_user(token)
+            return result.user.model_dump(mode="json") if result and result.user else None
+        except AuthApiError: return None
+    def logout(self, token):
+        self.client().auth.admin.sign_out(token)
 
 provider = Provider()
 
 @app.exception_handler(RuntimeError)
 @app.exception_handler(requests.RequestException)
+@app.exception_handler(httpx.RequestError)
 async def upstream_error(request, exc): return JSONResponse({"error": "Authentication provider unavailable"}, status_code=503)
 
 @app.exception_handler(HTTPException)
@@ -50,17 +64,15 @@ credentials_schema={"requestBody":{"required":True,"content":{"application/json"
 async def signup(request: Request):
     body = await credentials(request)
     if not body: return JSONResponse({"error":"Email and password required"}, status_code=400)
-    r = provider.call("POST", "signup", body)
-    if not r.ok: return JSONResponse({"error":"Signup failed"}, status_code=400)
-    return r.json().get("user", r.json())
+    try: return provider.signup(body)
+    except AuthApiError: return JSONResponse({"error":"Signup failed"}, status_code=400)
 
 @app.post("/auth/login", openapi_extra=credentials_schema)
 async def login(request: Request):
     body = await credentials(request)
     if not body: return JSONResponse({"error":"Email and password required"}, status_code=400)
-    r = provider.call("POST", "token?grant_type=password", body)
-    if not r.ok: return JSONResponse({"error":"Invalid login credentials"}, status_code=401)
-    data = r.json(); return {"access_token":data["access_token"], "refresh_token":data["refresh_token"]}
+    try: return provider.login(body)
+    except AuthApiError: return JSONResponse({"error":"Invalid login credentials"}, status_code=401)
 
 @app.get("/protected/profile")
 def profile(session=Depends(verified)):
@@ -71,6 +83,6 @@ def dashboard(session=Depends(verified)): return {"message":"Authenticated", "us
 
 @app.post("/auth/logout", status_code=204)
 def logout(session=Depends(verified)):
-    r=provider.call("POST", "logout", token=session["token"])
-    if not r.ok: return JSONResponse({"error":"Logout failed"}, status_code=502)
+    try: provider.logout(session["token"])
+    except AuthApiError: return JSONResponse({"error":"Logout failed"}, status_code=502)
     return Response(status_code=204)
