@@ -1,0 +1,12 @@
+
+# Local configuration and generated files
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+node_modules/
+dist/
+cache/
+reports/
